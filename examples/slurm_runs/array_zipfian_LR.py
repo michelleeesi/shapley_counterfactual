@@ -2,7 +2,7 @@
 #SBATCH --array=1-250
 import os
 
-from functions import *
+from algorithm_functions import *
 import multiprocessing
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
