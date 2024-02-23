@@ -28,6 +28,7 @@ from sklearn.preprocessing import MinMaxScaler
 
 
 # %%
+# Each data point will be cast into a data item to save properties such as power in the coalition
 class DataItemMC:
     def __init__(self, ind):
         self.index = ind
@@ -42,11 +43,14 @@ class DataItemMC:
         return f"x_{self.index} has ev {self.mean} with stdev {self.std}"
 
 # %%
-def BFSubsetKDE(A, B, all_train_data, target_data, owners, test, util):
+# Brute force algorithm to find the optimal subset to shift from A to B
+def BFSubsetCF(A, B, all_train_data, target_data, owners, test, util):
     subsets_dict = {}
     A_data = owners[A]
     B_data = owners[B]
     if (len(A_data)==1): return A_data
+
+    # checking all subsets in increasing order of size
     for i in range(1, len(A_data)):
         allSub = list(itertools.combinations(A_data, i))
         for subset in allSub:
@@ -56,85 +60,108 @@ def BFSubsetKDE(A, B, all_train_data, target_data, owners, test, util):
                 newA = A_data.copy()
                 for el in subset:
                     newA.remove(el)
+
+                # updating dictionaries of owned data per owner
                 owners.update({A: newA})
                 owners.update({B: list(np.append(B_data, list(subset)))})
                 print("A: " + str(owners[A]))
                 print("B: " + str(owners[B]))
-                difference = diffShapleyKDE(all_train_data, target_data, test, owners, A, B, util)
+
+                # checking difference
+                difference = diffShapleyCF(all_train_data, target_data, test, owners, A, B, util)
                 print("difference: " +str(difference))
                 owners.update({A: A_data})
                 owners.update({B: B_data})
+
+                # stop if difference is negative
                 if difference < 0:
                     return subset
 
 # %%
-def MCSubsetKDE(A, B, all_train_data, target_data, owners, ss_size, delta, test,util):
-    diff = diffShapleyMCKDE({}, all_train_data, target_data, owners, A, B, delta, 50, test, util)
+# Monte Carlo algorithm to find the optimal subset to shift from A to B
+def MCSubsetCF(A, B, all_train_data, target_data, owners, ss_size, delta, test,util):
+
+    # getting initial MC difference between A and B, stop if already negative
+    diff = diffShapleyMCCF({}, all_train_data, target_data, owners, A, B, delta, 50, test, util)
     if diff[0] < 0:
         return [[], 0, True, diff[0]]
+    
     t1 = time.time()
     if (len(owners[A])==1): return [owners[A], 0, True, -1]
     flipped = False
+
     A_data = owners[A]
     B_data = owners[B]
     perms = 0
     permutations_dict = {}
+
+    # checking subsets in increasing order of size
     for i in range(1, len(A_data)):
         allSub = list(itertools.combinations(A_data, i))
         for subset in allSub:
             print(subset)
-            total_samples = []
             newA = A_data.copy()
             for el in subset:
                 newA.remove(el)
             owners.update({A: newA})
             owners.update({B: list(np.append(B_data, list(subset)))})
 #           
-            est_mean, added_perms, permutations_dict = diffShapleyMCKDE(permutations_dict, all_train_data, target_data, owners, A, B, delta, ss_size, test, util)
+            # sample coalitions by generating permutations until Shapley difference is negative and has stopped changing within a tolerance bound
+            est_mean, added_perms, permutations_dict = diffShapleyMCCF(permutations_dict, all_train_data, target_data, owners, A, B, delta, ss_size, test, util)
             perms += added_perms
-
             owners.update({A: A_data})
             owners.update({B: B_data})
             print(est_mean)
             t2 = time.time()
+
+            # stop if time limit is reached
             if (t2-t1 > 7200):
                 return subset, perms, False, 1
+            
+            # verify if shifted subset actually has negative difference
             if est_mean < 0: 
                 owners.update({A: newA})
                 owners.update({B: list(np.append(B_data, list(subset)))})
-                diff = diffShapleyMCKDE(permutations_dict, all_train_data, target_data, owners, A, B, delta, ss_size, test, util)
+                diff = diffShapleyMCCF(permutations_dict, all_train_data, target_data, owners, A, B, delta, ss_size, test, util)
                 if (diff[0] < 0):
                     flipped = True
                 else:
                     flipped = False
-                # flipped = verifyShapley(A, B, all_train_data, target_data, owners, ss_size, delta, test,util)
                 owners.update({A: A_data})
                 owners.update({B: B_data})
                 return subset, perms, flipped, diff[0]
     return [None,perms, False, 1]
 
 # %%
-def monteCarloKDE(curr_est, permutations_dict, owners, all_train_data, target_data, A, B, step_size, test, util):
+# draw permutations for the Monte Carlo estimation of Shapley
+def monteCarloCF(curr_est, permutations_dict, owners, all_train_data, target_data, A, B, step_size, test, util):
     if (len(owners[A])==1): return [[-1], permutations_dict]
     A_data = owners[A]
     B_data = owners[B]
+
+    # get step_size permutations every round
     for i in range(step_size):
+
+        # draw a permutation, get coalition from permutation
         permutation = np.random.permutation(list(owners.keys()))
         S = findCoalition(permutation, A, B)
         permString = listToString(S)
 
         P_data = []
 
+        # get data from coalition
         if permString not in permutations_dict:
             P_data = [item for key in S for item in owners.get(key, [])]
             permutations_dict.update({permString: P_data})
         else:
             P_data = permutations_dict[permString]
 
+        # transfer data ownership between A and B
         owners.update({A: list(np.append(owners[A], P_data))})
         owners.update({B: list(np.append(owners[B], P_data))})
 
-        curr_est.append((1/(len(owners)-len(S)-1))*0.5*len(owners.keys())*diffUtilityKDE(all_train_data, target_data, test, owners, A, B, util))
+        # get utility of the data transfer
+        curr_est.append((1/(len(owners)-len(S)-1))*0.5*len(owners.keys())*diffUtilityCF(all_train_data, target_data, test, owners, A, B, util))
 
         owners.update({A: A_data})
         owners.update({B: B_data})
@@ -142,8 +169,11 @@ def monteCarloKDE(curr_est, permutations_dict, owners, all_train_data, target_da
         
 
 # %%
-def greedyKDE(A, B, all_train_data, target_data, owners, ss_size, delta, test, util):
-    diff = diffShapleyMCKDE({}, all_train_data, target_data, owners, A, B, delta, 50, test, util)
+# SV-Exp algorithm to find the optimal subset to shift from A to B
+def greedyCF(A, B, all_train_data, target_data, owners, ss_size, delta, test, util):
+   
+   # get initial difference between A and B, stop if already negative
+    diff = diffShapleyMCCF({}, all_train_data, target_data, owners, A, B, delta, 50, test, util)
     if diff[0] < 0:
         return [[], 0, True, diff[0]]
     tbeg = time.time()
@@ -156,9 +186,11 @@ def greedyKDE(A, B, all_train_data, target_data, owners, ss_size, delta, test, u
     
     t0=time.time()
     
+    # preprocess the data and cast all single items into Data Items
     allTest, other_owner_data = processGreedy(owners, A, B)
     
-    topk = topKBaselineKDE(diff[2], A, B, owners, all_train_data, target_data, other_owner_data, allTest, ss_size, 1, delta, test, util)
+    # get top k items to shift from A to B
+    topk = topKBaselineCF(diff[2], A, B, owners, all_train_data, target_data, other_owner_data, allTest, ss_size, 1, delta, test, util)
     
     topk_items = [i.index for i in topk[0]]
     
@@ -169,7 +201,10 @@ def greedyKDE(A, B, all_train_data, target_data, owners, ss_size, delta, test, u
     t1 = time.time()
     print(f"The time it took for first iteration was: {t1-t0}")
     
+    # for each item in top k
     for i in range(1, len(topk_items)+1):
+        
+        # add the top 1 item to the subset, update A and B with data transfer
         subset.append(topk_items[0]) # try with 1, then 2, etc.
         print(subset)
         newA = A_data.copy()
@@ -177,11 +212,11 @@ def greedyKDE(A, B, all_train_data, target_data, owners, ss_size, delta, test, u
             newA.remove(el)
         owners.update({A: newA})
         owners.update({B: list(np.append(B_data, list(subset)))})
-        probability = math.inf
         
         t2=time.time()
 
-        est_mean, added_perms, permutations_dict = diffShapleyMCKDE(permutations_dict, all_train_data, target_data, owners, A, B, delta, ss_size, test, util)
+        # estimate the differential Shapley until tolerance is reached
+        est_mean, added_perms, permutations_dict = diffShapleyMCCF(permutations_dict, all_train_data, target_data, owners, A, B, delta, ss_size, test, util)
         perms += added_perms
 
         owners.update({A: A_data})
@@ -190,23 +225,28 @@ def greedyKDE(A, B, all_train_data, target_data, owners, ss_size, delta, test, u
         t3=time.time()
         print(f"The time it took for moving subset was: {t3-t2}")
         tend = time.time()
+
+        # time out if it takes too long
         if(tend-tbeg > 7200):
             return subset, perms, False, 1
+        
+        # if the differential Shapley is negative, verify if subset transfer actually flipped Shapleys and return subset
         if est_mean < 0: 
             owners.update({A: newA})
             owners.update({B: list(np.append(B_data, list(subset)))})
-            diff = diffShapleyMCKDE(permutations_dict, all_train_data, target_data, owners, A, B, delta, ss_size, test, util)
+            diff = diffShapleyMCCF(permutations_dict, all_train_data, target_data, owners, A, B, delta, ss_size, test, util)
             if (diff[0] < 0):
                 flipped = True
             else:
                 flipped = False
-            # flipped = verifyShapley(A, B, all_train_data, target_data, owners, ss_size, delta, test,util)
             owners.update({A: A_data})
             owners.update({B: B_data})
             return subset, perms, flipped, diff[0]
         
         t4=time.time()
-        topk = topKBaselineKDE(permutations_dict, A, B, owners, all_train_data, target_data, other_owner_data, topk[0][1:], ss_size, 1, delta, test, util)
+
+        # run the top k algorithm again with the top 1 item removed to get the next best item to shift
+        topk = topKBaselineCF(permutations_dict, A, B, owners, all_train_data, target_data, other_owner_data, topk[0][1:], ss_size, 1, delta, test, util)
         
         topk_items = [i.index for i in topk[0]]
         
@@ -220,7 +260,8 @@ def greedyKDE(A, B, all_train_data, target_data, owners, ss_size, delta, test, u
     return [0,0]
 
 # %%
-def topKBaselineKDE(permutations_dict, A, B, owners, all_train_data, target_data, other_owner_data, items, step_size, k, delta, test, util):
+# Thompson sampling implementation for the top k algorithm
+def topKBaselineCF(permutations_dict, A, B, owners, all_train_data, target_data, other_owner_data, items, step_size, k, delta, test, util):
     if (len(owners[A])==1): return [items, 0, {}]
 
     A_data = owners[A].copy()
@@ -228,7 +269,9 @@ def topKBaselineKDE(permutations_dict, A, B, owners, all_train_data, target_data
 
     total_perms = 0
 
+    # first round of Thompson sampling
     if len(items[0].power)==0:
+        # sample twice to get mean
         for i in range(2):
             permutation = np.random.permutation(list(owners.keys()))
             S = findCoalition(permutation, A, B)
@@ -242,36 +285,40 @@ def topKBaselineKDE(permutations_dict, A, B, owners, all_train_data, target_data
             else:
                 P_data = permutations_dict[permString]
             coaString = listToString(P_data)
-    #                 print("datatups")
-    #                 for l in O: print(l)
 
+            # for each item, sample the differential utility post transferring that one item and add to list of sample powers of that data item
             for i in items:
-                # samples = []
                 owners.update({A: list(set(np.append(owners[A], P_data)))})
                 owners.update({B: list(set(np.append(owners[B], P_data)))})
                 owners[A].remove(i.index)
                 owners[B].append(i.index)
                 if coaString not in i.coa_dict:
-                    i.coa_dict.update({coaString: 0.5*len(owners)*(1/(len(owners)-len(S)-1))*diffUtilityKDE(all_train_data, target_data, test, owners, A, B, util)})
+                    i.coa_dict.update({coaString: 0.5*len(owners)*(1/(len(owners)-len(S)-1))*diffUtilityCF(all_train_data, target_data, test, owners, A, B, util)})
                 i.power.append(i.coa_dict[coaString])
                 owners.update({A: A_data})
                 owners.update({B: B_data})
 
+        # take the mean and stdev of the two samples for all items
         for i in items:
             i.mean = np.mean(i.power)
             i.std = np.std(i.power, ddof=1)
     
+    # sort the items by mean power
     sorted_items = sorted(items, key=lambda x:x.mean)
 
-    while total_perms < 30000 and not findSig(sorted_items, 1, delta):
+    # while the first and second item are not significantly different, sample more
+    while not findSig(sorted_items, 1, delta):
 
+        # for each sample, sample randomly from the gaussian distribution of the power of that item
         for i in sorted_items:
             ran_mean = np.random.normal(loc=np.mean(i.power), scale=np.std(i.power, ddof=1)/math.sqrt(len(i.power)))
             i.ran_mean = ran_mean
         
+        # sort the items by sampled power
         thompson_sorted = sorted(items, key=lambda x:x.ran_mean)
         i = thompson_sorted[0]
 
+        # for the item with the best mean, sample more
         for r in range(step_size):
             total_perms += 1
             permutation = np.random.permutation(list(owners.keys()))
@@ -294,7 +341,7 @@ def topKBaselineKDE(permutations_dict, A, B, owners, all_train_data, target_data
             owners[B].append(i.index)
 
             if coaString not in i.coa_dict:
-                i.coa_dict.update({coaString: 0.5*len(owners)*(1/(len(owners)-len(S)-1))*diffUtilityKDE(all_train_data, target_data, test, owners, A, B, util)})
+                i.coa_dict.update({coaString: 0.5*len(owners)*(1/(len(owners)-len(S)-1))*diffUtilityCF(all_train_data, target_data, test, owners, A, B, util)})
             i.power.append(i.coa_dict[coaString])
             # samples.append(i.coa_dict[coaString])
             owners.update({A: A_data})
@@ -302,13 +349,17 @@ def topKBaselineKDE(permutations_dict, A, B, owners, all_train_data, target_data
             
         i.mean = np.mean(i.power)
         i.std = np.std(i.power, ddof=1)
+
+        # update gaussian for best item, resort
         sorted_items = sorted(sorted_items, key=lambda x:x.mean)
+
         # print("1st place mean: ", sorted_items[0].mean)
         # print("2nd place mean: ", sorted_items[1].mean)
     return [sorted_items, total_perms, permutations_dict]
 
 # %%
-def diffShapleyMCKDE(permutations_dict, all_train_data, target_data, owners, A, B, delta, ss_size, test, util):
+# Monte Carlo estimation of Shapley difference, stop when tolerance is reached
+def diffShapleyMCCF(permutations_dict, all_train_data, target_data, owners, A, B, delta, ss_size, test, util):
     total_samples = []
     perms = 0
 
@@ -317,7 +368,7 @@ def diffShapleyMCKDE(permutations_dict, all_train_data, target_data, owners, A, 
 
     while (change > 0.01):
         perms += ss_size
-        total_samples, permutations_dict = monteCarloKDE(total_samples, permutations_dict, owners, all_train_data, target_data, A, B, ss_size, test, util)
+        total_samples, permutations_dict = monteCarloCF(total_samples, permutations_dict, owners, all_train_data, target_data, A, B, ss_size, test, util)
         est_mean = np.mean(total_samples)
         est_std = np.std(total_samples, ddof=1)
         print("mean: ", est_mean)
@@ -328,7 +379,8 @@ def diffShapleyMCKDE(permutations_dict, all_train_data, target_data, owners, A, 
     return est_mean, perms, permutations_dict
 
 # %%
-def preprocessKDE(n_owners, ds_size, total_size, train, test, owner_data_dist, owner_size_dist, starting_diff, util):
+# assign data items to owners based on parameters
+def preprocessCF(n_owners, ds_size, total_size, train, test, owner_data_dist, owner_size_dist, starting_diff, util):
 
     train = train.sort_values(by=random.choice(train.columns[:-1].tolist()))
     num_rows, num_cols = train.shape
@@ -351,10 +403,10 @@ def preprocessKDE(n_owners, ds_size, total_size, train, test, owner_data_dist, o
             if (owner_data_dist == 'uniform'):
                 owner_data = random.sample(range(0, num_rows), size)
                 
-            if (owner_data_dist == 'clustered'):
-                gmm = estimate_gaussian_mixture(train, column, num_components=4)
-                sampled_rows = sample_rows_from_gaussian_component(train, gmm, column, component_index=random.randint(0,3), num_samples=size)
-                owner_data = list(sampled_rows)
+            # if (owner_data_dist == 'clustered'):
+            #     gmm = estimate_gaussian_mixture(train, column, num_components=4)
+            #     sampled_rows = sample_rows_from_gaussian_component(train, gmm, column, component_index=random.randint(0,3), num_samples=size)
+            #     owner_data = list(sampled_rows)
                 
             
         if (owner_size_dist == 'zipfian'):
@@ -364,10 +416,10 @@ def preprocessKDE(n_owners, ds_size, total_size, train, test, owner_data_dist, o
             if (owner_data_dist == 'uniform'):
                 owner_data = random.sample(range(0, num_rows), size)
                     
-            if (owner_data_dist == 'clustered'):
-                gmm = estimate_gaussian_mixture(train, column, num_components=4)
-                sampled_rows = sample_rows_from_gaussian_component(train, gmm, column, component_index=random.randint(0,3), num_samples=size)
-                owner_data = list(sampled_rows)
+            # if (owner_data_dist == 'clustered'):
+            #     gmm = estimate_gaussian_mixture(train, column, num_components=4)
+            #     sampled_rows = sample_rows_from_gaussian_component(train, gmm, column, component_index=random.randint(0,3), num_samples=size)
+            #     owner_data = list(sampled_rows)
         
         owners.update({i: owner_data})
     
@@ -378,9 +430,11 @@ def preprocessKDE(n_owners, ds_size, total_size, train, test, owner_data_dist, o
     
     
     lenA = 0
+
+    # choose A and B such that A has a higher estimed Shapley
     while (lenA<=1):
         twoOwners = random.sample(list(owners.keys()), 2)
-        difference = diffShapleyMCKDE({},train, train.loc[dataset], owners, twoOwners[0], twoOwners[1], 0.05, 50, test, util)
+        difference = diffShapleyMCCF({},train, train.loc[dataset], owners, twoOwners[0], twoOwners[1], 0.05, 50, test, util)
 
         print(difference)
         
@@ -398,6 +452,7 @@ def preprocessKDE(n_owners, ds_size, total_size, train, test, owner_data_dist, o
         
 
 # %%
+# assign data owner sizes and data according to a Zipf distribution
 def zipfian_assignment(n_owners, A_size, B_size, train):
     owners = {}
     dataset = set()
@@ -418,46 +473,37 @@ def zipfian_assignment(n_owners, A_size, B_size, train):
     return dataset, owners, n_owners-2, n_owners-1          
             
 
-# %%
-def estimate_gaussian_mixture(dataframe, column_name, num_components=4, random_state=42):
-    """
-    Estimate a Gaussian Mixture Model (GMM) for a specified column in a DataFrame.
+# # %%
+# # assign data ownership according to a gaussian mixture model
+# def estimate_gaussian_mixture(dataframe, column_name, num_components=4, random_state=42):
+#     # Extract the target column as a 1D array
+#     target_data = dataframe[column_name].values.reshape(-1, 1)
 
-    Parameters:
-        dataframe (pd.DataFrame): The DataFrame containing the data.
-        column_name (str): The name of the column to estimate the GMM for.
-        num_components (int): The number of Gaussian components in the mixture (default is 2).
-        random_state (int): Random seed for reproducibility (default is 42).
+#     # Create and fit the Gaussian Mixture Model
+#     gmm = GaussianMixture(n_components=num_components, random_state=random_state)
+#     gmm.fit(target_data)
+#     return gmm
 
-    Returns:
-        GaussianMixture: The fitted GMM model.
-    """
-    # Extract the target column as a 1D array
-    target_data = dataframe[column_name].values.reshape(-1, 1)
-
-    # Create and fit the Gaussian Mixture Model
-    gmm = GaussianMixture(n_components=num_components, random_state=random_state)
-    gmm.fit(target_data)
-    return gmm
-
-# %%
-def sample_rows_from_gaussian_component(dataframe, gmm, column, component_index, num_samples, random_state=42):
-    np.random.seed(random_state)
+# # %%
+# # sample rows from a gaussian mixture model according to component
+# def sample_rows_from_gaussian_component(dataframe, gmm, column, component_index, num_samples, random_state=42):
+#     np.random.seed(random_state)
     
-    # Assign each row to a GMM component
-    component_assignments = gmm.predict(dataframe[column].values.reshape(-1, 1))
-    print(component_assignments)
+#     # Assign each row to a GMM component
+#     component_assignments = gmm.predict(dataframe[column].values.reshape(-1, 1))
+#     print(component_assignments)
 
-    # Get the indices of rows assigned to the specified component
-    component_indices = np.where(component_assignments == component_index)[0]
+#     # Get the indices of rows assigned to the specified component
+#     component_indices = np.where(component_assignments == component_index)[0]
 
-    # Randomly sample rows from the specified component
-    sampled_indices = np.random.choice(component_indices, size=num_samples, replace=False)
+#     # Randomly sample rows from the specified component
+#     sampled_indices = np.random.choice(component_indices, size=num_samples, replace=False)
 
-    return sampled_indices
+#     return sampled_indices
 
 # %%
-def diffShapleyKDE(all_train_data, target_data, test, owners, A, B, util):
+# brute force method of calculating a Differential Shapley without any Monte Carlo estimation
+def diffShapleyCF(all_train_data, target_data, test, owners, A, B, util):
     A_data = owners[A]
     B_data = owners[B]
     list_owners = list(owners.keys())
@@ -465,6 +511,8 @@ def diffShapleyKDE(all_train_data, target_data, test, owners, A, B, util):
     list_owners.remove(B)
     coalitions = powerset(list_owners)
     total = 0
+
+    # go through all the powersets in order of size
     for S in coalitions:
         P_data = []
         for o in S:
@@ -472,12 +520,13 @@ def diffShapleyKDE(all_train_data, target_data, test, owners, A, B, util):
         P_data = list(flatten(P_data))
         owners.update({A: list(np.append(owners[A], P_data))})
         owners.update({B: list(np.append(owners[B], P_data))})
-        total += 1/((len(S)+1)*math.comb(len(list(owners.keys()))-1,len(S)+1)) * diffUtilityKDE(all_train_data, target_data, test, owners, A, B, util)
+        total += 1/((len(S)+1)*math.comb(len(list(owners.keys()))-1,len(S)+1)) * diffUtilityCF(all_train_data, target_data, test, owners, A, B, util)
         owners.update({A: A_data})
         owners.update({B: B_data})
     return total
 
 # %%
+# see if the first item in the Thompson sampling sorted list is statistically different from the second item in the Thompson sampling sorted list
 def findSig(tups, k, delta):
     if len(tups)==1: return True
     first = tups[0]
@@ -485,8 +534,7 @@ def findSig(tups, k, delta):
     z = norm.ppf(1-(delta/2))
     n = len(tups[0].power)
     if n==0: return False
-    # if (tups[0].mean+z*(tups[0].std/np.sqrt(n))<=tups[1].mean and tups[1].mean-z*(tups[1].std/np.sqrt(n))>=tups[0].mean):
-    #     return True
+
     mean_diff = second.mean-first.mean
     lb = mean_diff-z*np.sqrt(first.std**2+second.std**2)/np.sqrt(n)
     ub = mean_diff+z*np.sqrt(first.std**2+second.std**2)/np.sqrt(n)
@@ -494,12 +542,8 @@ def findSig(tups, k, delta):
         return False
     return True
 
-
+# Generate zipfian random variables
 def zipfian(a, minimum, maximum, size=None):
-    """
-    Generate Zipf-like random variables,
-    but in inclusive [min...max] interval
-    """
     if min == 0:
         raise ZeroDivisionError("")
 
@@ -509,6 +553,7 @@ def zipfian(a, minimum, maximum, size=None):
 
     return np.random.choice(v, size=size, replace=True, p=p)
 
+# Find a coalition given a permutation and two owners A and B
 def findCoalition(permutation, o1, o2):
     coa = []
     for data_owner in permutation:
@@ -534,11 +579,11 @@ def powerset(s):
     powerset = list(itertools.chain.from_iterable(itertools.combinations(s, r) for r in range(len(s)+1)))
     return powerset
 
-def wrap_testBatchKDE(args):
-    return testBatchKDE(*args)
+def wrap_testBatchCF(args):
+    return testBatchCF(*args)
 
 # %%
-# data_owner_data is a list of indices
+# utility of a dataset is difference in error when trained with vs without that dataset
 def utilityKDE(all_train_data, target_data, test_data, data_owner_data):
 
     data_owner_data = [int(x) for x in data_owner_data]
@@ -565,7 +610,7 @@ def utilityKDE(all_train_data, target_data, test_data, data_owner_data):
     return -np.mean(errors)
 
 # %%
-def diffUtilityKDE(all_train_data, target_data, test_data, owners, o1, o2, util='decision_tree'):
+def diffUtilityCF(all_train_data, target_data, test_data, owners, o1, o2, util='decision_tree'):
     return utilityFunc(all_train_data, target_data, test_data, owners[o1], util) - utilityFunc(all_train_data, target_data, test_data, owners[o2],util)
 
 # %%
@@ -580,7 +625,7 @@ def utilityFunc(all_train_data, target_data, test_data, data_owner_data, util):
         return utilityLR(all_train_data, target_data, test_data, data_owner_data)
 
 # %%
-# data_owner_data is a list of indices
+# utility of a dataset is difference in error when trained with vs without that dataset
 def utilityKNN(all_train_data, target_data, test_data, data_owner_data):
     
     data_owner_data = [int(x) for x in data_owner_data]
@@ -619,6 +664,7 @@ def utilityKNN(all_train_data, target_data, test_data, data_owner_data):
     return large_loss - small_loss
 
 # %%
+# decision tree utility function
 def utilityDecisionTree(all_train_data, target_data, test_data, data_owner_data):
     data_owner_data = [int(x) for x in data_owner_data]
 
@@ -642,6 +688,7 @@ def utilityDecisionTree(all_train_data, target_data, test_data, data_owner_data)
 
 
 # %%
+# logistic regression utility function
 def utilityLR(all_train_data, target_data, test_data, data_owner_data):
     data_owner_data = [int(x) for x in data_owner_data]
 
@@ -671,7 +718,7 @@ def utilityLR(all_train_data, target_data, test_data, data_owner_data):
 
 # %%
 def kernel_density_estimation(data, bandwidth=0.2, kernel='gaussian', x_grid=None):
-    # Fit the KDE model
+    # Fit the CF model
     data = np.array(data)
     kde = KernelDensity(bandwidth=bandwidth, kernel=kernel)
     kde.fit(data[:,np.newaxis])
@@ -687,52 +734,11 @@ def kernel_density_estimation(data, bandwidth=0.2, kernel='gaussian', x_grid=Non
     density = np.exp(log_dens)
 
     return x_grid, density
-
-# %%
-def preComputeSingleton(items, owners, target_data, test, A, B, util, iter=10000):
-    for r in range(iter):
-#             print(total_perms)
-        permutation = np.random.permutation(list(owners.keys()))
-
-        S = findCoalition(permutation, A, B)
-        permString = listToString(S)
-
-        P_data = []
-
-        if permString not in permutations_dict:
-            P_data = [item for key in S for item in owners.get(key, [])]
-            permutations_dict.update({permString: P_data})
-        else:
-            P_data = permutations_dict[permString]
-        coaString = listToString(P_data)
-        
-        for i in items:
-            owners.update({A: list(set(np.append(owners[A], P_data)))})
-            owners.update({B: list(set(np.append(owners[B], P_data)))})
-            owners[A].remove(i.index)
-            owners[B].append(i.index)
-
-            if coaString not in i.coa_dict:
-                i.coa_dict.update({coaString: 0.5*len(owners)*(1/(len(owners)-len(S)-1))*diffUtilityKDE(all_train_data, target_data, test, owners, A, B, util)})
-            # samples.append(i.coa_dict[coaString])
-            owners.update({A: A_data})
-            owners.update({B: B_data})
     
 
 # %%
-def shuffle_and_split(data):
-    '''Takes an array x, shuffles, and splits into training and data set'''
-    
-#     np.split(original_data.sample(frac=1, random_state=1729), 
-#                                [int(0.8 * len(original_data)), int(0.2*len(original_data))])
-#     shuffled = data.sample(frac=1)
-#     folds = np.array_split(shuffled, n_folds)  
-    
-#     np.random.shuffle(x)
-#     X_train, X_test = x[:int((len(x)*0.8)), :], x[int(len(x)*0.8):, :]
-#     X_train = pd.DataFrame(data=X_train)
-#     X_test = pd.DataFrame(data=X_test)
-    
+# shuffle and split the data into training and test sets
+def shuffle_and_split(data):    
     X_train, X_test = np.split(data.sample(frac=1, random_state=1729), [int(0.8 * len(data))])
     
     X_train = X_train.reset_index(drop=True)
@@ -740,17 +746,20 @@ def shuffle_and_split(data):
     return X_train, X_test
 
 # %%
-def compareAllKDE(all_train_data, test_data, target_data_size, num_owners, num_tries, start_diff, data_dist, size_dist, util):
+# master function for comparing all counterfactuals for a given distribution of data owners
+# compares MC and SV-Exp
+def compareAllCF(all_train_data, test_data, target_data_size, num_owners, num_tries, start_diff, data_dist, size_dist, util):
 
-    dataset, owners, A, B = preprocessKDE(num_owners, target_data_size, len(all_train_data), all_train_data, test_data, owner_data_dist= data_dist, owner_size_dist = size_dist, starting_diff=start_diff, util=util)
+    dataset, owners, A, B = preprocessCF(num_owners, target_data_size, len(all_train_data), all_train_data, test_data, owner_data_dist= data_dist, owner_size_dist = size_dist, starting_diff=start_diff, util=util)
     while (len(owners[A])==1 and len(owners[B])==1):
-        dataset, owners, A, B = preprocessKDE(num_owners, target_data_size, len(all_train_data), all_train_data, test_data, owner_data_dist=data_dist, owner_size_dist = size_dist, starting_diff=start_diff, util=util)
+        dataset, owners, A, B = preprocessCF(num_owners, target_data_size, len(all_train_data), all_train_data, test_data, owner_data_dist=data_dist, owner_size_dist = size_dist, starting_diff=start_diff, util=util)
     print(dataset)
     print(owners)
     print(A)
     print(owners[A])
     print(B)
     print(owners[B])
+
     BFSol = None
 #     BFSol = BFSubset(A, B, data = dataset, owners = owners, mat = mat)
     MCSamples = []
@@ -766,8 +775,9 @@ def compareAllKDE(all_train_data, test_data, target_data_size, num_owners, num_t
     
     for i in range(num_tries):
 
+        # SV-Exp Greedy Algorithm
         grbstimestart = time.time()
-        greedySolBaseline = greedyKDE(A, B, all_train_data, all_train_data.loc[dataset], owners, 10, 0.05, test_data, util)
+        greedySolBaseline = greedyCF(A, B, all_train_data, all_train_data.loc[dataset], owners, 10, 0.05, test_data, util)
         grbstimeend = time.time()
         grbsTime = grbstimeend - grbstimestart
         GRBSTimes.append(grbsTime)
@@ -776,9 +786,9 @@ def compareAllKDE(all_train_data, test_data, target_data_size, num_owners, num_t
         greedyBaselineAnswers.append(len(greedySolBaseline[0]))
         GRBSDiff.append(greedySolBaseline[3])
         
-
+        # MC Algorithm
         mctimestart = time.time()
-        MCSol = MCSubsetKDE(A, B, all_train_data, all_train_data.loc[dataset], owners, 10, 0.05, test_data, util)
+        MCSol = MCSubsetCF(A, B, all_train_data, all_train_data.loc[dataset], owners, 10, 0.05, test_data, util)
         mctimeend = time.time()
         mcTime = mctimeend - mctimestart
         MCTimes.append(mcTime)
@@ -790,6 +800,7 @@ def compareAllKDE(all_train_data, test_data, target_data_size, num_owners, num_t
     return len(dataset), len(set(owners[A])), len(set(owners[B])), BFSol, MCSamples, greedyBaselineSamples, MCAnswers, greedyBaselineAnswers, MCTimes, GRBSTimes, MCCheck, greedyBaselineCheck, MCDiff, GRBSDiff
 
 # %%
+# compares SV-Exp and MC for a given size distribution between A and B for zipfian-distributed data owners
 def compareZipfian(all_train_data, test_data, A_size, B_size, num_owners, data_dist, size_dist, util,ds_name, csv_file_path):
     
     BFSol = None
@@ -815,7 +826,7 @@ def compareZipfian(all_train_data, test_data, A_size, B_size, num_owners, data_d
     print(owners[B])
 
     grbstimestart = time.time()
-    greedySolBaseline = greedyKDE(A, B, all_train_data, all_train_data.loc[dataset], owners, 10, 0.05, test_data, util)
+    greedySolBaseline = greedyCF(A, B, all_train_data, all_train_data.loc[dataset], owners, 10, 0.05, test_data, util)
     grbstimeend = time.time()
     grbsTime = grbstimeend - grbstimestart
     GRBSTimes.append(grbsTime)
@@ -825,7 +836,7 @@ def compareZipfian(all_train_data, test_data, A_size, B_size, num_owners, data_d
             
 
     mctimestart = time.time()
-    MCSol = MCSubsetKDE(A, B, all_train_data, all_train_data.loc[dataset], owners, 10, 0.05, test_data, util)
+    MCSol = MCSubsetCF(A, B, all_train_data, all_train_data.loc[dataset], owners, 10, 0.05, test_data, util)
     mctimeend = time.time()
     mcTime = mctimeend - mctimestart
     MCTimes.append(mcTime)
@@ -844,13 +855,13 @@ def wrap_compareZipfian(args):
     
 
 # %%
+# assign clusters for the natural data distribution experiment
 def assignClusters(df, cat):
     unique_categories = df[cat].unique()
 
     # Create a dictionary to store the lists of indices
     owner_data = {}
     category_indices = {}
-
 
     # Iterate through unique values and extract the indices
     for i in range(len(unique_categories)):
@@ -860,6 +871,7 @@ def assignClusters(df, cat):
 
     return owner_data, category_indices
 
+# compare SV-Exp and MC for a given natural data distribution where data owners own different categories of data
 def compareNatural(all_train_data, test_data, cat, A, B, data_dist, size_dist, util, ds_name, csv_file_path, trial):
     
     BFSol = None
@@ -873,20 +885,14 @@ def compareNatural(all_train_data, test_data, cat, A, B, data_dist, size_dist, u
     MCTimes = []
     GRBSTimes = []
     
+    # assign the data owners to their respective categories
     owners, categories = assignClusters(all_train_data, cat)
-
-    # categorical_columns = all_train_data.select_dtypes(include=['object']).columns
 
     all_train_data = all_train_data.drop(cat, axis=1)
     test_data = test_data.drop(cat, axis=1)
 
-    # for i in range(len(owners)):
-    #     for j in range(len(owners)):
-    #         if (i != j):
-    #             A = i
-    #             B = j
     grbstimestart = time.time()
-    greedySolBaseline = greedyKDE(A, B, all_train_data, all_train_data, owners, 20, 0.05, test_data, util)
+    greedySolBaseline = greedyCF(A, B, all_train_data, all_train_data, owners, 20, 0.05, test_data, util)
     grbstimeend = time.time()
     grbsTime = grbstimeend - grbstimestart
     GRBSTimes.append(grbsTime)
@@ -896,7 +902,7 @@ def compareNatural(all_train_data, test_data, cat, A, B, data_dist, size_dist, u
             
 
     mctimestart = time.time()
-    MCSol = MCSubsetKDE(A, B, all_train_data, all_train_data, owners, 20, 0.05, test_data, util)
+    MCSol = MCSubsetCF(A, B, all_train_data, all_train_data, owners, 20, 0.05, test_data, util)
     mctimeend = time.time()
     mcTime = mctimeend - mctimestart
     MCTimes.append(mcTime)
@@ -913,58 +919,10 @@ def compareNatural(all_train_data, test_data, cat, A, B, data_dist, size_dist, u
 
 def wrap_compareNatural(args):
     return compareNatural(*args)       
-    
-
-
-# %%
-def verifyShapley(A, B, all_train_data, target_data, owners, ss_size, delta, test,util="decision_tree"):
-    owner_A_samples = []
-    owner_B_samples = []
-    permutations_dict = {}
-
-    A_data = owners[A]
-    B_data = owners[B]
-    value2 = -1000
-    value1 = 1000
-    while value2<0<value1:
-        for r in range(ss_size):
-            permutation = np.random.permutation(list(owners.keys()))
-            S = findCoalition(permutation, A, B)
-            permString = listToString(S)
-
-            P_data = []
-
-            if permString not in permutations_dict:
-                P_data = [item for key in S for item in owners.get(key, [])]
-                permutations_dict.update({permString: P_data})
-            else:
-                P_data = permutations_dict[permString]
-            
-            owners.update({A: list(np.append(owners[A], P_data))})
-            owners.update({B: list(np.append(owners[B], P_data))})
-
-            owner_A_samples.append(utilityFunc(all_train_data, target_data, test, owners[A], util)-utilityFunc(all_train_data, target_data, test, P_data, util))
-            owner_B_samples.append(utilityFunc(all_train_data, target_data, test, owners[B], util)-utilityFunc(all_train_data, target_data, test, P_data, util))
-            owners.update({A: A_data})
-            owners.update({B: B_data})
-        owner_A_mean = np.mean(owner_A_samples)
-        owner_A_std = np.std(owner_A_samples,ddof=1)
-        owner_B_mean = np.mean(owner_B_samples)
-        owner_B_std = np.std(owner_B_samples,ddof=1)
-        n = len(owner_A_samples)
-        print("n: ", n)
-        value1 = owner_A_mean-owner_B_mean + 1.96*np.sqrt(owner_A_std**2+owner_B_std**2)/np.sqrt(n)
-        value2 = owner_A_mean-owner_B_mean -1.96*np.sqrt(owner_A_std**2+owner_B_std**2)/np.sqrt(n)
-        
-    print("difference in means: ",owner_A_mean-owner_B_mean)
-    if(owner_A_mean < owner_B_mean):
-        return True
-    else:
-        return False
             
 
-
 # %%
+# cast individual data items into Data Item objects so that Thompson sampling can keep track of means and stdevs
 def processGreedy(owners, A, B):
     other_owner_data = []
     for k in list(owners.keys()):
@@ -977,7 +935,9 @@ def processGreedy(owners, A, B):
     return allTest, other_owner_data
 
 # %%
-def testBatchKDE(all_train_data, test_data, target_data_size, num_owners, num_iterations, num_trials, start_diff, data_dist, size_dist, csv_file_path,util, ds_name):
+# Master comparison: Test SV-Exp vs MC for all uniform distributions of data over different data assignments
+# Record times, samples, and answers for each trial
+def testBatchCF(all_train_data, test_data, target_data_size, num_owners, num_iterations, num_trials, start_diff, data_dist, size_dist, csv_file_path,util, ds_name):
     totalMCSamples = []
     trueAnswers = []
     finalMCAnswers = []
@@ -998,7 +958,7 @@ def testBatchKDE(all_train_data, test_data, target_data_size, num_owners, num_it
     totalGRBSCheck = []
 
     for i in range(num_trials):
-        datasetSize, ownerASize, ownerBSize, correctSol, MCSamples, greedyBaselineSamples, mcSub, greedyBaselineSubset, MCTimes, GRBSTimes, MCCheck, GRBSCheck, MCDiff, GRBSDiff = compareAllKDE(all_train_data, test_data, target_data_size, num_owners, num_iterations, start_diff, data_dist, size_dist, util)
+        datasetSize, ownerASize, ownerBSize, correctSol, MCSamples, greedyBaselineSamples, mcSub, greedyBaselineSubset, MCTimes, GRBSTimes, MCCheck, GRBSCheck, MCDiff, GRBSDiff = compareAllCF(all_train_data, test_data, target_data_size, num_owners, num_iterations, start_diff, data_dist, size_dist, util)
         datasetSizes.append(datasetSize)
         ownerASizes.append(ownerASize)
         ownerBSizes.append(ownerBSize)
@@ -1066,7 +1026,7 @@ def testBatchKDE(all_train_data, test_data, target_data_size, num_owners, num_it
 # owners.update({B: list(np.append(B_data, list(subset)))})
 # print(owners[7])
 # print(owners[6])
-# res=diffShapleyMCKDE({}, X_train, X_train, owners, A, B, 0.05, 10, X_test, "log_reg")
+# res=diffShapleyMCCF({}, X_train, X_train, owners, A, B, 0.05, 10, X_test, "log_reg")
 # # results = compareNatural("arrival_month", X_train_adult, X_test_adult, "clustered", "zipfian", "log_reg","adult", "PRACTICE_NATURAL_PART2.csv", 1)
 # # # columns_to_scale = X_train_spam.columns.drop("target")
 # # X_train_spam[columns_to_scale] = scaler.fit_transform(X_train_spam[columns_to_scale])
@@ -1081,7 +1041,7 @@ def testBatchKDE(all_train_data, test_data, target_data_size, num_owners, num_it
 # # # utilityFunc(sample, sample, X_test, owners[6], "log_reg")
 
 # # # %%
-# datasetSizes, ownerASizes, ownerBSizes, trueAnswers, totalMCSamples, totalGreedyBaselineSamples, finalMCAnswers, finalGreedyBaselineAnswers, MCTimesAvg, GRBSTimesAvg, totalMCCheck, totalGRBSCheck, MCDiff, GRBSDiff = testBatchKDE(X_train_cancer, X_test_cancer, 100, 15, 1, num_trials=1, start_diff=0, data_dist="uniform", size_dist="uniform",csv_file_path="GAHHHHHHHHEXPERIMENTS.csv",util="log_reg",ds_name="cancer")
+# datasetSizes, ownerASizes, ownerBSizes, trueAnswers, totalMCSamples, totalGreedyBaselineSamples, finalMCAnswers, finalGreedyBaselineAnswers, MCTimesAvg, GRBSTimesAvg, totalMCCheck, totalGRBSCheck, MCDiff, GRBSDiff = testBatchCF(X_train_cancer, X_test_cancer, 100, 15, 1, num_trials=1, start_diff=0, data_dist="uniform", size_dist="uniform",csv_file_path="GAHHHHHHHHEXPERIMENTS.csv",util="log_reg",ds_name="cancer")
 
 # %%
 # blah = compareNatural("workclass", X_train.sample(n=800), X_test, "clustered", "zipfian", "log_reg", "adult", "PRACTICE_NATURAL.csv")
@@ -1090,6 +1050,6 @@ def testBatchKDE(all_train_data, test_data, target_data_size, num_owners, num_it
 # test1 = compareZipfian(3**4, 3**2, X_train, X_test, 10, "uniform", "zipfian", "log_reg","cancer", "ZIPFIAN_TABLE_DATA.csv")
 
 # %%
-# diffShapleyMCKDE(X_train_cancer, X_train_cancer.loc[dataset], owners, A, B, 0.05, 10, X_test_cancer, "log_reg")
+# diffShapleyMCCF(X_train_cancer, X_train_cancer.loc[dataset], owners, A, B, 0.05, 10, X_test_cancer, "log_reg")
 
 
