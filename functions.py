@@ -801,6 +801,7 @@ def compareAllCF(all_train_data, test_data, target_data_size, num_owners, num_tr
 
 # %%
 # compares SV-Exp and MC for a given size distribution between A and B for zipfian-distributed data owners
+# %%
 def compareZipfian(all_train_data, test_data, A_size, B_size, num_owners, data_dist, size_dist, util,ds_name, csv_file_path):
     
     BFSol = None
@@ -885,7 +886,6 @@ def compareNatural(all_train_data, test_data, cat, A, B, data_dist, size_dist, u
     MCTimes = []
     GRBSTimes = []
     
-    # assign the data owners to their respective categories
     owners, categories = assignClusters(all_train_data, cat)
 
     all_train_data = all_train_data.drop(cat, axis=1)
@@ -918,7 +918,7 @@ def compareNatural(all_train_data, test_data, cat, A, B, data_dist, size_dist, u
     
 
 def wrap_compareNatural(args):
-    return compareNatural(*args)       
+    return compareNatural(*args)   
             
 
 # %%
@@ -976,80 +976,4 @@ def testBatchCF(all_train_data, test_data, target_data_size, num_owners, num_ite
             csv_writer.writerow([datasetSize, ownerASize, ownerBSize, MCSamples[0], greedyBaselineSamples[0], mcSub[0], greedyBaselineSubset[0], MCTimes[0], GRBSTimes[0],MCCheck[0],GRBSCheck[0],MCDiff[0], GRBSDiff[0],num_owners,data_dist, size_dist,util,ds_name])
     
     return datasetSizes, ownerASizes, ownerBSizes, trueAnswers, totalMCSamples, totalGreedyBaselineSamples, finalMCAnswers, finalGreedyBaselineAnswers, totalMCTimes, totalGRBSTimes, totalMCCheck, totalGRBSCheck, MCDiff, GRBSDiff
-
-# %% [markdown]
-# 
-
-# %%
-# adult_data = pd.read_csv("adult.csv")
-# X_train, X_test = shuffle_and_split(adult_data)
-# X_train.to_csv("adult_train.csv", index=False)
-# X_test.head(200).to_csv("adult_test.csv", index=False)
-
-# %%
-# X_train.head()
-
-# %%
-
-
-# %%
-# cat = "marital-status"
-# X_train = pd.read_csv("adult_train.csv")
-# X_test = pd.read_csv("adult_test.csv")
-# sample = X_train.sample(n=800)
-# owners, categories = assignClusters(sample, cat)
-# categorical_columns = sample.select_dtypes(include=['object']).columns
-# sample = sample.drop(categorical_columns, axis=1)
-# X_test = X_test.drop(categorical_columns, axis=1)
-# for key in owners:
-#     print(len(owners[key]))
-# print(categories)
-
-# X_train_cancer = pd.read_csv("breast_cancer_train_copy.csv")
-# X_test_cancer = pd.read_csv("breast_cancer_test_copy.csv")
-# scaler = MinMaxScaler()
-
-# X_train = pd.read_csv("reservation_train.csv")
-# X_test = pd.read_csv("reservation_test.csv")
-# owners, categories = assignClusters(X_train, "arrival_month")
-# print(categories)
-# A=7
-# B=6
-# print(owners[A])
-# print(owners[B])
-# subset=[38,44,62,65]
-# newA = owners[A].copy()
-# B_data = owners[B]
-# for el in subset:
-#     newA.remove(el)
-# owners.update({A: newA})
-# owners.update({B: list(np.append(B_data, list(subset)))})
-# print(owners[7])
-# print(owners[6])
-# res=diffShapleyMCCF({}, X_train, X_train, owners, A, B, 0.05, 10, X_test, "log_reg")
-# # results = compareNatural("arrival_month", X_train_adult, X_test_adult, "clustered", "zipfian", "log_reg","adult", "PRACTICE_NATURAL_PART2.csv", 1)
-# # # columns_to_scale = X_train_spam.columns.drop("target")
-# # X_train_spam[columns_to_scale] = scaler.fit_transform(X_train_spam[columns_to_scale])
-# X_test_spam[columns_to_scale] = scaler.fit_transform(X_test_spam[columns_to_scale])
-
-# # columns_to_scale_c = X_train_cancer.columns.drop("target")
-# # X_train_cancer[columns_to_scale_c] = scaler.fit_transform(X_train_cancer[columns_to_scale_c])
-# # X_test_cancer[columns_to_scale_c] = scaler.fit_transform(X_test_cancer[columns_to_scale_c])
-
-
-# # # %%
-# # # utilityFunc(sample, sample, X_test, owners[6], "log_reg")
-
-# # # %%
-# datasetSizes, ownerASizes, ownerBSizes, trueAnswers, totalMCSamples, totalGreedyBaselineSamples, finalMCAnswers, finalGreedyBaselineAnswers, MCTimesAvg, GRBSTimesAvg, totalMCCheck, totalGRBSCheck, MCDiff, GRBSDiff = testBatchCF(X_train_cancer, X_test_cancer, 100, 15, 1, num_trials=1, start_diff=0, data_dist="uniform", size_dist="uniform",csv_file_path="GAHHHHHHHHEXPERIMENTS.csv",util="log_reg",ds_name="cancer")
-
-# %%
-# blah = compareNatural("workclass", X_train.sample(n=800), X_test, "clustered", "zipfian", "log_reg", "adult", "PRACTICE_NATURAL.csv")
-
-# %%
-# test1 = compareZipfian(3**4, 3**2, X_train, X_test, 10, "uniform", "zipfian", "log_reg","cancer", "ZIPFIAN_TABLE_DATA.csv")
-
-# %%
-# diffShapleyMCCF(X_train_cancer, X_train_cancer.loc[dataset], owners, A, B, 0.05, 10, X_test_cancer, "log_reg")
-
 
