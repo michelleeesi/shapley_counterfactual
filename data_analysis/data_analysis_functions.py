@@ -73,11 +73,12 @@ def plot_sorted_columns(dataframes, sort_column, column1, column2):
 
 
 # %%
-def prepareData(csv_list):
+def prepareData(csv_list, plot_col):
     for df in csv_list:
+        df.loc[df['MC_time'] > 7200, 'MC_time'] = float('nan')
+        df.loc[df['greedy_time'] > 7200, 'greedy_time'] = float('nan')
         df = add_log_column(df, ["MC_time", "greedy_time"])
-    plot_sorted_columns(csv_list, "Log_MC_time", "Log_MC_time","Log_greedy_time")
-
+    plot_sorted_columns(csv_list, plot_col, "MC_time","greedy_time")
 # %%
 
 def process_csv_files(csv_files, columns_to_process):
@@ -104,6 +105,69 @@ def process_csv_files(csv_files, columns_to_process):
     return processed_df
 
 # %%
+
+def plot_sorted_columns(dataframes, xvar, column1, column2):
+    """
+    Sort DataFrames by a specified column and plot two other columns against their indices.
+
+    Parameters:
+    - dataframes: list of pandas DataFrames
+      The input list containing the DataFrames.
+    - sort_column: str
+      The name of the column by which to sort the DataFrames.
+    - column1: str
+      The name of the first column to plot.
+    - column2: str
+      The name of the second column to plot.
+    """
+    # Create subplots with 2 rows and 5 columns
+    # fig, axes = plt.subplots(1, 2, figsize=(18, 8))
+
+    for i, df in enumerate(dataframes):
+
+        
+        df = df.sort_values(by=xvar)
+
+        # plt.scatter(df[xvar], df[column1], label=f"MC, n={df['num_owners'][0]}", color = cblue)
+
+        plt.scatter(df[xvar], df[column2], label=f"n={df['num_owners'][0]}")
+
+        plt.yscale('log')
+
+        # # Reset the index of the sorted DataFrame
+        # sorted_df = sorted_df.reset_index(drop=True)
+
+        # # Plot the two columns against their indices
+        # row = i // 3
+        # col = 1
+        # axes[row, col].plot(sorted_df.index, sorted_df[column1], label=column1)
+        # axes[row, col].plot(sorted_df.index, sorted_df[column2], label=column2)
+
+        # # Set labels and legend for each subplot
+        # axes[row, col].set_title(f"{df['util'][0]}, {df['num_owners'][0]}, {df['ds_name'][0]}")
+        # axes[row, col].set_xlabel('Trial')
+        # axes[row, col].set_ylabel('Runtime (in seconds)')
+        # axes[row, col].legend()
+
+    # Adjust layout for better spacing
+    plt.tight_layout()
+    plt.legend()
+    # plt.xlabel('Size of A Dataset - Size of B Dataset', fontsize=16)
+    # plt.xlabel('Size of B Dataset', fontsize=16)
+    plt.xlabel('Size of SV-Exp Counterfactual', fontsize=16)
+    plt.ylabel('Runtime (in seconds)', fontsize=16)
+    # plt.title('Runtime of SV-Exp vs. A-B Dataset Size Difference', fontsize=19, pad=10)
+    plt.title('Runtime of SV-Exp vs. \n Size of SV-Exp Counterfactual', fontsize=19, pad=10)
+    # plt.title('Runtime of SV-Exp vs. Size of B Dataset', fontsize=19, pad=10)
+    # plt.figure(figsize=(200, 20))
+
+    plt.xscale('log')
+    plt.yscale('log')
+
+    plt.xlim(0, 90)
+    # Show the plot
+    plt.show()
+
 def plot_runtimes(summary_stats, mc_var, greedy_var):
     # Sample data (replace this with your actual data)
     mc_time_means = summary_stats[f'{mc_var}_mean']
@@ -119,28 +183,33 @@ def plot_runtimes(summary_stats, mc_var, greedy_var):
     num_points = len(mc_time_means)
 
     # Plotting
-    fig, ax = plt.subplots(figsize=(10, 6))
+    plt.figure(figsize=(10, 6))  # Set figure size
 
     bar_width = 0.35
     index = np.arange(num_points)
 
-    bar1 = ax.bar(index, mc_time_means, bar_width, label='MC', yerr=mc_time_stds, capsize=5)
-    bar2 = ax.bar(index + bar_width, greedy_time_means, bar_width, label='Greedy', yerr=greedy_time_stds, capsize=5)
+    # Plot bars for MC
+    plt.bar(index, mc_time_means, bar_width, label='MC', yerr=mc_time_stds, capsize=5)
+    # Plot bars for SV-Exp
+    plt.bar(index + bar_width, greedy_time_means, bar_width, label='SV-Exp', yerr=greedy_time_stds, capsize=5)
 
-    ax.set_xlabel('Parameter Set')
-    ax.set_ylabel('Mean Logged Runtime')
-    ax.set_title(f'Logged Runtime Performance for {util[0]} Utility')
+    plt.xlabel('Parameter Set', fontsize=17)
+    plt.ylabel('Mean Runtime (seconds)', fontsize=17)
+    plt.title(f'Runtime Performance for {util[0]} Utility', fontsize=20)
 
     # Use custom labels for x-axis
     parameter_labels = [f"{util[i]}, \n n={num_owners[i]}" for i in range(0, num_points)]
-    print(parameter_labels)
-    ax.set_xticks(index + bar_width / 2)
-    ax.set_xticklabels(parameter_labels, fontsize=8)
-    plt.ylim(0, 10)
+    plt.xticks(index + bar_width / 2, parameter_labels, fontsize=12)
+
+    # Customize the y-axis tick labels to e^y
+    plt.yscale('log')
+
+    plt.ylim(0, 10000)
 
     plt.legend()
     
     plt.show()
+
 
 # %%
 def shuffle_and_split(data):
@@ -152,10 +221,25 @@ def shuffle_and_split(data):
     return X_train, X_test
 
 # %%
+
 def makeTableNat(df, x, y, metrics):
 
     # Group by all possible combinations of two columns and calculate the mean runtime
     for m in metrics:
+
+        title = ""
+        
+        if m == "MC_answer":
+            title = "MC Counterfactual Size"
+        
+        if m == "greedy_answer":
+            title = "SV-Exp Counterfactual Size"
+
+        if m == "MC_accuracy":
+            title = "MC Counterfactual Accuracy"
+
+        if m == "greedy_accuracy":
+            title = "SV-Exp Counterfactual Accuracy"
 
         grouped_mean = df.groupby([x, y])[m].apply(lambda group: group.mean(skipna=False)).reset_index()
         grouped_std = df.groupby([x, y])[m].apply(lambda group: group.std(skipna=False)).reset_index()
@@ -179,26 +263,45 @@ def makeTableNat(df, x, y, metrics):
         plt.subplot(1, 2, 1)
         sns.heatmap(pivot_table_mean, xticklabels=months, yticklabels=months[::-1], annot=True, cmap='YlGnBu', fmt=".2f",annot_kws={"size": 8})
         # plt.title(f'{m} Mean Heatmap')
-        # plt.title('MC Counterfactual Size Mean Heatmap')
-        plt.title('SV-Exp Counterfactual Accuracy Mean Heatmap')
-        plt.xlabel("Month (A)")
-        plt.ylabel("Month (B)")
+        # plt.title('MC Counterfactual Accuracy Mean Heatmap', fontsize=15, pad=10)
+        plt.title(f'{title} Mean Heatmap', fontsize=15, pad=10)
+        plt.xlabel("Month (A)", fontsize=13)
+        plt.ylabel("Month (B)", fontsize=13)
+        plt.tick_params(labelsize=11)
 
         plt.subplot(1, 2, 2)
         sns.heatmap(pivot_table_std, xticklabels=months, yticklabels=months[::-1], annot=True, cmap='YlGnBu', fmt=".2f",annot_kws={"size": 8})
         # plt.title(f'{m} Std. Dev. Heatmap')
-        # plt.title('MC Counterfactual Size Std. Dev. Heatmap')
-        plt.title('SV-Exp Counterfactual Accuracy Std. Dev. Heatmap')
-        plt.xlabel("Month (A)")
-        plt.ylabel("Month (B)")
+        # plt.title('MC Counterfactual Accuracy Std. Dev. Heatmap', fontsize=15, pad=10)
+        plt.title(f'{title} Std. Dev. Heatmap', fontsize=15, pad=10)
+        plt.xlabel("Month (A)", fontsize=13)
+        plt.ylabel("Month (B)", fontsize=13)
 
+        plt.tick_params(labelsize=11)
         plt.tight_layout()
         plt.show()
 
+
 # %%
+
 def makeTableZipf(df, x, y, metrics):
     # Group by all possible combinations of two columns and calculate the mean runtime
     for m in metrics:
+
+        title = ""
+        
+        if m == "MC_answer":
+            title = "MC Counterfactual Size"
+        
+        if m == "greedy_answer":
+            title = "SV-Exp Counterfactual Size"
+
+        if m == "MC_accuracy":
+            title = "MC Counterfactual Accuracy"
+
+        if m == "greedy_accuracy":
+            title = "SV-Exp Counterfactual Accuracy"
+
         grouped_mean = df.groupby([x, y])[m].apply(lambda group: group.mean(skipna=False)).reset_index()
         grouped_std = df.groupby([x, y])[m].apply(lambda group: group.std(skipna=False)).reset_index()
 
@@ -211,23 +314,25 @@ def makeTableZipf(df, x, y, metrics):
         # Create a heatmap
         plt.figure(figsize=(12, 6))
         plt.subplot(1, 2, 1)
-        sns.heatmap(pivot_table_mean, annot=True, cmap='YlGnBu', fmt=".2f")
+        sns.heatmap(pivot_table_mean, annot=True, cmap='YlGnBu', fmt=".2f",annot_kws={"size": 10})
         # plt.title(f'{m} Mean Heatmap')
-        plt.title('SV-Exp Counterfactual Size Mean Heatmap')
+        plt.title(f'{title} Mean Heatmap', fontsize=15, pad=10)
         # plt.title('MC Counterfactual Accuracy Mean Heatmap')
-        plt.xlabel("Size of Owned Data (A)")
-        plt.ylabel("Size of Owned Data (B)")
+        plt.xlabel("Size of Owned Data (A)", fontsize=13)
+        plt.ylabel("Size of Owned Data (B)", fontsize=13)
 
         plt.subplot(1, 2, 2)
-        sns.heatmap(pivot_table_std, annot=True, cmap='YlGnBu', fmt=".2f")
+        sns.heatmap(pivot_table_std, annot=True, cmap='YlGnBu', fmt=".2f",annot_kws={"size": 10})
         # plt.title(f'{m} Std. Dev. Heatmap')
-        plt.title('SV-Exp Counterfactual Size Std. Dev. Heatmap')
+        plt.title(f'{title} Std. Dev. Heatmap', fontsize=15, pad=10)
         # plt.title('MC Counterfactual Accuracy Std. Dev. Heatmap')
-        plt.xlabel("Size of Owned Data (A)")
-        plt.ylabel("Size of Owned Data (B)")
+        plt.xlabel("Size of Owned Data (A)", fontsize=13)
+        plt.ylabel("Size of Owned Data (B)", fontsize=13)
 
+        plt.tick_params(labelsize=12)
         plt.tight_layout()
         plt.show()
+    
 
 # %%
 def kl_mvn(m0, S0, m1, S1):
