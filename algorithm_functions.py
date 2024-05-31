@@ -24,8 +24,13 @@ from sklearn.metrics import mean_squared_error
 import csv
 from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import MinMaxScaler
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import accuracy_score
+from sklearn import metrics
 
-
+housing_test = pd.read_csv("housing_test.csv")
+housing_train = pd.read_csv("housing_train.csv")
 
 # %%
 # Each data point will be cast into a data item to save properties such as power in the coalition
@@ -44,7 +49,10 @@ class DataItemMC:
 
 # %%
 # Brute force algorithm to find the optimal subset to shift from A to B
-def BFSubsetCF(A, B, all_train_data, target_data, owners, test, util):
+def BFSubsetCF(A, B, all_train_data, target_data, owners, delta, test, util):
+    diff = diffShapleyMCCF({}, all_train_data, target_data, owners, A, B, delta, 50, test, util)
+    if diff[0] < 0:
+        return []
     subsets_dict = {}
     A_data = owners[A]
     B_data = owners[B]
@@ -83,8 +91,9 @@ def MCSubsetCF(A, B, all_train_data, target_data, owners, ss_size, delta, test,u
 
     # getting initial MC difference between A and B, stop if already negative
     diff = diffShapleyMCCF({}, all_train_data, target_data, owners, A, B, delta, 50, test, util)
+    orig_diff = diff[0]
     if diff[0] < 0:
-        return [[], 0, True, diff[0]]
+        return [[], 0, True, diff[0], orig_diff]
     
     t1 = time.time()
     if (len(owners[A])==1): return [owners[A], 0, True, -1]
@@ -115,8 +124,8 @@ def MCSubsetCF(A, B, all_train_data, target_data, owners, ss_size, delta, test,u
             t2 = time.time()
 
             # stop if time limit is reached
-            if (t2-t1 > 7200):
-                return subset, perms, False, 1
+            if (t2-t1 > 5):
+                return subset, perms, False, 1, orig_diff
             
             # verify if shifted subset actually has negative difference
             if est_mean < 0: 
@@ -129,7 +138,7 @@ def MCSubsetCF(A, B, all_train_data, target_data, owners, ss_size, delta, test,u
                     flipped = False
                 owners.update({A: A_data})
                 owners.update({B: B_data})
-                return subset, perms, flipped, diff[0]
+                return subset, perms, flipped, diff[0], orig_diff
     return [None,perms, False, 1]
 
 # %%
@@ -174,8 +183,9 @@ def greedyCF(A, B, all_train_data, target_data, owners, ss_size, delta, test, ut
    
    # get initial difference between A and B, stop if already negative
     diff = diffShapleyMCCF({}, all_train_data, target_data, owners, A, B, delta, 50, test, util)
+    orig_diff = diff[0]
     if diff[0] < 0:
-        return [[], 0, True, diff[0]]
+        return [[], 0, True, diff[0], orig_diff]
     tbeg = time.time()
     if (len(owners[A])==1): return [owners[A], 0, True, -1]
     flipped = False
@@ -188,6 +198,8 @@ def greedyCF(A, B, all_train_data, target_data, owners, ss_size, delta, test, ut
     
     # preprocess the data and cast all single items into Data Items
     allTest, other_owner_data = processGreedy(owners, A, B)
+
+    print("GOT HERE")
     
     # get top k items to shift from A to B
     topk = topKBaselineCF(diff[2], A, B, owners, all_train_data, target_data, other_owner_data, allTest, ss_size, 1, delta, test, util)
@@ -227,8 +239,8 @@ def greedyCF(A, B, all_train_data, target_data, owners, ss_size, delta, test, ut
         tend = time.time()
 
         # time out if it takes too long
-        if(tend-tbeg > 7200):
-            return subset, perms, False, 1
+        if(t3-t0 > 7200):
+            return subset, perms, False, 1, orig_diff
         
         # if the differential Shapley is negative, verify if subset transfer actually flipped Shapleys and return subset
         if est_mean < 0: 
@@ -241,7 +253,7 @@ def greedyCF(A, B, all_train_data, target_data, owners, ss_size, delta, test, ut
                 flipped = False
             owners.update({A: A_data})
             owners.update({B: B_data})
-            return subset, perms, flipped, diff[0]
+            return subset, perms, flipped, diff[0], orig_diff
         
         t4=time.time()
 
@@ -306,8 +318,10 @@ def topKBaselineCF(permutations_dict, A, B, owners, all_train_data, target_data,
     # sort the items by mean power
     sorted_items = sorted(items, key=lambda x:x.mean)
 
+    z = norm.ppf(1-(delta/2))
+
     # while the first and second item are not significantly different, sample more
-    while not findSig(sorted_items, 1, delta):
+    while findSig(sorted_items, 1, delta)==False and 2*z*sorted_items[0].std > 0.01:
 
         # for each sample, sample randomly from the gaussian distribution of the power of that item
         for i in sorted_items:
@@ -358,6 +372,19 @@ def topKBaselineCF(permutations_dict, A, B, owners, all_train_data, target_data,
     return [sorted_items, total_perms, permutations_dict]
 
 # %%
+# cast individual data items into Data Item objects so that Thompson sampling can keep track of means and stdevs
+def processGreedy(owners, A, B):
+    other_owner_data = []
+    for k in list(owners.keys()):
+        if (k != A and k != B):
+            other_owner_data.append(owners[k])
+    other_owner_data = set(flatten(other_owner_data))
+    allTest = []
+    for i in list(set(owners[A])):
+        allTest.append(DataItemMC(i))
+    return allTest, other_owner_data
+
+# %%
 # Monte Carlo estimation of Shapley difference, stop when tolerance is reached
 def diffShapleyMCCF(permutations_dict, all_train_data, target_data, owners, A, B, delta, ss_size, test, util):
     total_samples = []
@@ -377,6 +404,57 @@ def diffShapleyMCCF(permutations_dict, all_train_data, target_data, owners, A, B
         print("change: ",change)
 
     return est_mean, perms, permutations_dict
+
+# def findShapleyMC(permutations_dict, all_train_data, target_data, owners, A, B, delta, ss_size, test, util):
+    
+#     for i in range(step_size):
+
+#         # draw a permutation, get coalition from permutation
+#         permutation = np.random.permutation(list(owners.keys()))
+#         S = findCoalitionOne(permutation)
+#         permString = listToString(S)
+
+#         P_data = []
+
+#         # get data from coalition
+#         if permString not in permutations_dict:
+#             P_data = [item for key in S for item in owners.get(key, [])]
+#             permutations_dict.update({permString: P_data})
+#         else:
+#             P_data = permutations_dict[permString]
+
+#         # transfer data ownership between A and B
+#         owners.update({A: list(np.append(owners[A], P_data))})
+
+#         # get utility of the data transfer
+#         curr_est.append((1/(len(owners)-len(S)-1))*0.5*len(owners.keys())*diffUtilityCF(all_train_data, target_data, test, owners, A, B, util))
+
+#         owners.update({A: A_data})
+#         owners.update({B: B_data})
+#     return curr_est, permutations_dict
+
+# def findShapleyCF(owners_dict, utility_func, num_samples=1000):
+#     change = math.inf
+#     owners = list(owners_dict.keys())
+#     num_owners = len(owners)
+#     shapley_values = {owner: 0 for owner in owners}
+#     num_samples = 0
+
+#     while (change > 0.01):
+#         permutation = np.random.permutation(owners)
+#         marginal_contributions = {owner: 0 for owner in owners}
+
+#         for i in range(num_owners):
+#             current_coalition = permutation[:i]
+#             next_owner = permutation[i]
+#             current_value = value_function(current_coalition)
+#             extended_coalition_value = value_function(current_coalition + [next_owner])
+#             marginal_contributions[next_owner] += extended_coalition_value - current_value
+
+#         for owner in owners:
+#             shapley_values[owner] += marginal_contributions[owner] / num_samples
+
+#     return shapley_values
 
 # %%
 # assign data items to owners based on parameters
@@ -563,6 +641,15 @@ def findCoalition(permutation, o1, o2):
             return sorted(coa)
     return sorted(coa)
 
+def findCoalitionOne(permutation, o):
+    coa = []
+    for data_owner in permutation:
+        if (data_owner!=o):
+            coa.append(data_owner)
+        else:
+            return sorted(coa)
+    return sorted(coa)
+
 def listToString(perm):
     return ' '.join(str(x) for x in perm)
 
@@ -623,6 +710,12 @@ def utilityFunc(all_train_data, target_data, test_data, data_owner_data, util):
         return utilityKNN(all_train_data, target_data, test_data, data_owner_data)
     elif util == 'log_reg':
         return utilityLR(all_train_data, target_data, test_data, data_owner_data)
+    elif util == 'random_forest':
+        return utilityRF(all_train_data, target_data, test_data, data_owner_data)
+    elif util == 'random_forest_reg':
+        return utilityRFReg(all_train_data, target_data, test_data, data_owner_data)
+    elif util == 'lin_reg':
+        return utilityLinReg(all_train_data, target_data, test_data, data_owner_data)
 
 # %%
 # utility of a dataset is difference in error when trained with vs without that dataset
@@ -716,6 +809,92 @@ def utilityLR(all_train_data, target_data, test_data, data_owner_data):
     small_loss = -1*log_loss(test_data_labels, small_pred_probs)
     return small_loss
 
+
+# %%
+from sklearn.linear_model import LinearRegression
+import numpy as np
+
+# linear regression utility function
+def utilityLinReg(all_train_data, target_data, test_data, data_owner_data):
+    target_data = pd.DataFrame(target_data)
+    # data_owner_data is list of column names
+    data_owner_train_columns = target_data[data_owner_data]
+    #print(data)
+
+    x_train = target_data[data_owner_data].values
+
+    y_train = target_data["target"].values
+    x_test = test_data[data_owner_data].values 
+
+    y_test = test_data["target"].values
+
+    lr = LinearRegression()
+    lr.fit(x_train, y_train)
+
+    y_pred=lr.predict(x_test)
+    y_pred_train = lr.predict(x_train)
+
+    # small_loss = -metrics.mean_squared_error(y_test, y_pred)
+    small_loss = -metrics.mean_squared_error(y_train, y_pred_train)
+    print(data_owner_data)
+    print(small_loss)
+    return small_loss
+
+# linear regression utility function
+def utilityRFReg(all_train_data, target_data, test_data, data_owner_data):
+    target_data = pd.DataFrame(target_data)
+    # data_owner_data is list of column names
+    data_owner_train_columns = target_data[data_owner_data]
+    #print(data)
+
+    x_train = target_data[data_owner_data].values
+
+    y_train = target_data["target"].values
+    x_test = test_data[data_owner_data].values 
+
+    y_test = test_data["target"].values
+
+    rfr = RandomForestRegressor()
+    rfr.fit(x_train, y_train)
+
+    y_pred=rfr.predict(x_test)
+    y_pred_train = rfr.predict(x_train)
+
+    # small_loss = -metrics.mean_squared_error(y_test, y_pred)
+    small_loss = -metrics.mean_squared_error(y_train, y_pred_train)
+    print(data_owner_data)
+    print(small_loss)
+    return small_loss
+
+
+# utilityLinReg(housing_train, housing_train, housing_test, ['LSTAT'])
+# %%
+# random forest utility function
+def utilityRF(all_train_data, target_data, test_data, data_owner_data):
+
+    data_owner_data = [int(x) for x in data_owner_data]
+    data = target_data.loc[data_owner_data]
+    data_features = data.drop("target", axis=1).values
+    data_labels = data["target"].values
+    test_data_features = test_data.drop("target", axis=1).values
+
+
+    test_data_labels = test_data["target"].values
+
+    
+    # Create and train the random forest classifier
+    small_random_forest = RandomForestClassifier()
+    small_random_forest.fit(data_features, data_labels)
+    
+    # Predict probabilities for the test data
+    small_pred_probs = small_random_forest.predict(test_data_features)
+    # prediction_classes = small_pred_probs.classes_
+
+    # final_pred_probs = np.zeros((len(test_data), len(set(test_data_labels))))
+    
+    # Calculate the log loss
+    small_loss = accuracy_score(small_pred_probs, test_data_labels)
+    return small_loss
 # %%
 def kernel_density_estimation(data, bandwidth=0.2, kernel='gaussian', x_grid=None):
     # Fit the CF model
@@ -760,8 +939,8 @@ def compareAllCF(all_train_data, test_data, target_data_size, num_owners, num_tr
     print(B)
     print(owners[B])
 
-    BFSol = None
-#     BFSol = BFSubset(A, B, data = dataset, owners = owners, mat = mat)
+    # BFSol = None
+    BFSol = BFSubsetCF(A, B, all_train_data, all_train_data.loc[dataset], owners, 0.05, test_data, util)
     MCSamples = []
     greedyBaselineSamples = []
     MCAnswers = []
@@ -772,32 +951,38 @@ def compareAllCF(all_train_data, test_data, target_data_size, num_owners, num_tr
     GRBSTimes = []
     MCDiff = []
     GRBSDiff = []
+    GRBSOrigDiff = []
+    MCOrigDiff = []
     
-    for i in range(num_tries):
+    # for i in range(num_tries):
 
         # SV-Exp Greedy Algorithm
-        grbstimestart = time.time()
-        greedySolBaseline = greedyCF(A, B, all_train_data, all_train_data.loc[dataset], owners, 10, 0.05, test_data, util)
-        grbstimeend = time.time()
-        grbsTime = grbstimeend - grbstimestart
-        GRBSTimes.append(grbsTime)
-        greedyBaselineCheck.append(greedySolBaseline[2])
-        greedyBaselineSamples.append(greedySolBaseline[1])
-        greedyBaselineAnswers.append(len(greedySolBaseline[0]))
-        GRBSDiff.append(greedySolBaseline[3])
-        
-        # MC Algorithm
-        mctimestart = time.time()
-        MCSol = MCSubsetCF(A, B, all_train_data, all_train_data.loc[dataset], owners, 10, 0.05, test_data, util)
-        mctimeend = time.time()
-        mcTime = mctimeend - mctimestart
-        MCTimes.append(mcTime)
-        MCCheck.append(MCSol[2])
-        MCSamples.append(MCSol[1])
-        MCAnswers.append(len(MCSol[0]))
-        MCDiff.append(MCSol[3])
+    grbstimestart = time.time()
+    greedySolBaseline = greedyCF(A, B, all_train_data, all_train_data.loc[dataset], owners, 10, 0.05, test_data, util)
+    grbstimeend = time.time()
+    grbsTime = grbstimeend - grbstimestart
+    GRBSTimes.append(grbsTime)
+    greedyBaselineCheck.append(greedySolBaseline[2])
+    greedyBaselineSamples.append(greedySolBaseline[1])
+    greedyBaselineAnswers.append(len(greedySolBaseline[0]))
+    GRBSDiff.append(greedySolBaseline[3])
+    GRBSOrigDiff.append(greedySolBaseline[4])
 
-    return len(dataset), len(set(owners[A])), len(set(owners[B])), BFSol, MCSamples, greedyBaselineSamples, MCAnswers, greedyBaselineAnswers, MCTimes, GRBSTimes, MCCheck, greedyBaselineCheck, MCDiff, GRBSDiff
+    
+    # MC Algorithm
+    mctimestart = time.time()
+    MCSol = MCSubsetCF(A, B, all_train_data, all_train_data.loc[dataset], owners, 10, 0.05, test_data, util)
+    mctimeend = time.time()
+    mcTime = mctimeend - mctimestart
+    MCTimes.append(mcTime)
+    MCCheck.append(MCSol[2])
+    MCSamples.append(MCSol[1])
+    MCAnswers.append(len(MCSol[0]))
+    MCDiff.append(MCSol[3])
+    MCOrigDiff.append(MCSol[4])
+
+
+    return len(dataset), len(set(owners[A])), len(set(owners[B])), BFSol, MCSamples, greedyBaselineSamples, MCAnswers, MCSol[0], greedyBaselineAnswers, greedySolBaseline[0], MCTimes, GRBSTimes, MCCheck, greedyBaselineCheck, MCDiff, GRBSDiff, MCOrigDiff, GRBSOrigDiff
 
 # %%
 # compares SV-Exp and MC for a given size distribution between A and B for zipfian-distributed data owners
@@ -870,13 +1055,50 @@ def assignClusters(df, cat):
         owner_data[i] = df.index[df[cat] == category].tolist()
         category_indices[i] = category
 
+    print(owner_data)
     return owner_data, category_indices
 
+# %%
+# assign clusters for the natural data distribution experiment
+def assignColumns(df, num_owners):
+
+    # Create a dictionary to store the lists of indices
+    owner_data = {}
+    category_indices = {}
+    
+    columns = list(df.columns)
+    columns.remove('target')
+    num_cols = len(columns)
+
+    for i in range(num_owners):
+        if i == num_owners - 1:
+            owner_data[i] = columns
+            # category_indices[i] = columns
+            break
+        ran = random.randint(1, num_cols-(num_owners-i-1))
+        # print(ran)
+        # print(columns)
+        owner_data[i] = random.sample(columns, ran)
+        columns = [item for item in columns if item not in owner_data[i]]
+        # category_indices[i] = ran
+        num_cols = num_cols - ran
+
+    # FOR CASE STUDY
+    # owner_data = {0: ['RM', 'AGE', 'CHAS', 'NOX', 'DIS', 'RAD'], 1: ['CRIM', 'B', 'ZN', 'INDUS', 'TAX', 'PTRATIO', 'LSTAT']}
+    # owner_data = {0: ['LSTAT', 'RM', 'DIS'], 1: ['CRIM', 'B', 'ZN', 'INDUS', 'TAX', 'PTRATIO', 'AGE', 'CHAS', 'NOX',  'RAD']}
+    owner_data = {0: ['CHAS', 'NOX', 'DIS', 'RAD'], 1: ['CRIM', 'B', 'ZN', 'INDUS', 'TAX', 'PTRATIO', 'LSTAT'], 2: ['RM', 'AGE']}
+    # owner_data = {2: ['CHAS', 'NOX', 'DIS', 'RAD'], 1: ['CRIM', 'B', 'ZN', 'INDUS', 'TAX', 'PTRATIO', 'LSTAT'], 0: ['RM', 'AGE', 'ZN', 'INDUS']}
+    # owner_data = {0: ['RM', 'LSTAT', 'AGE', 'CHAS', 'NOX', 'DIS', 'RAD'], 1: ['RM', 'CRIM', 'B', 'ZN', 'INDUS', 'TAX', 'PTRATIO', 'LSTAT']}
+
+    return owner_data, category_indices
+
+# assignColumns(housing_train, 3)
+
 # compare SV-Exp and MC for a given natural data distribution where data owners own different categories of data
-def compareNatural(all_train_data, test_data, cat, A, B, data_dist, size_dist, util, ds_name, csv_file_path, trial):
+def compareNatural(all_train_data, test_data, cat, A, B, data_dist, size_dist, util, ds_name, csv_file_path, data_type):
     
     BFSol = None
-    #     BFSol = BFSubset(A, B, data = dataset, owners = owners, mat = mat)
+    # BFSol = BFSubsetCF(A, B, all_train_data, all_train_data, owners, test_data, util)
     MCSamples = []
     greedyBaselineSamples = []
     MCAnswers = []
@@ -886,10 +1108,17 @@ def compareNatural(all_train_data, test_data, cat, A, B, data_dist, size_dist, u
     MCTimes = []
     GRBSTimes = []
     
-    owners, categories = assignClusters(all_train_data, cat)
+    # OWNING DATA ROWS
+    if data_type == 'rows':
+        print("HI")
+        owners, categories = assignClusters(all_train_data, cat)
 
-    all_train_data = all_train_data.drop(cat, axis=1)
-    test_data = test_data.drop(cat, axis=1)
+    # OWNING DATA COLUMNS
+    if data_type == 'columns':
+        owners, categories = assignColumns(all_train_data, 3)
+
+    # all_train_data = all_train_data.drop(cat, axis=1)
+    # test_data = test_data.drop(cat, axis=1)
 
     grbstimestart = time.time()
     greedySolBaseline = greedyCF(A, B, all_train_data, all_train_data, owners, 20, 0.05, test_data, util)
@@ -912,27 +1141,24 @@ def compareNatural(all_train_data, test_data, cat, A, B, data_dist, size_dist, u
 
     with open(csv_file_path, 'a', newline='') as csv_file:
         csv_writer = csv.writer(csv_file)
-        csv_writer.writerow([categories[A], categories[B],len(owners[A]), len(owners[B]), MCSol[1], greedySolBaseline[1], len(MCSol[0]), len(greedySolBaseline[0]), mcTime, grbsTime,MCSol[2],greedySolBaseline[2],MCSol[3],greedySolBaseline[3],len(owners),data_dist, size_dist, util, ds_name, trial])
+        if data_type == 'columns':
+            csv_writer.writerow([owners[A], owners[B],len(owners[A]), len(owners[B]), MCSol[1], greedySolBaseline[1], len(MCSol[0]), MCSol[0], len(greedySolBaseline[0]), greedySolBaseline[0], mcTime, grbsTime,MCSol[2],greedySolBaseline[2],MCSol[3],greedySolBaseline[3], MCSol[4], greedySolBaseline[4], owners,data_dist, size_dist, util, ds_name])
+        if data_type == 'rows':
+            csv_writer.writerow([categories[A], categories[B],len(owners[A]), len(owners[B]), MCSol[1], greedySolBaseline[1], BFSol, len(MCSol[0]), MCSol[0], len(greedySolBaseline[0]), greedySolBaseline[0], mcTime, grbsTime,MCSol[2],greedySolBaseline[2],MCSol[3],greedySolBaseline[3], MCSol[4], greedySolBaseline[4], owners,data_dist, size_dist, util, ds_name])
 
     return BFSol, np.mean(MCSamples), np.mean(greedyBaselineSamples), np.mean(MCAnswers), np.mean(greedyBaselineAnswers), np.mean(MCTimes), np.mean(GRBSTimes), np.mean(MCCheck)*100, np.mean(greedyBaselineCheck)*100
     
 
 def wrap_compareNatural(args):
-    return compareNatural(*args)   
-            
+    return compareNatural(*args)
+
+# owners, categories = assignColumns(housing_train)
+
+# housing_train
+# greedySolBaseline = greedyCF(0, 1, housing_train, housing_train, {0: ["INDUS", "LSTAT", 'RAD', 'CRIM'], 1: ["TAX"], 2: ['NOX', 'RM', 'AGE']}, 20, 0.05, housing_test, "lin_reg")
 
 # %%
-# cast individual data items into Data Item objects so that Thompson sampling can keep track of means and stdevs
-def processGreedy(owners, A, B):
-    other_owner_data = []
-    for k in list(owners.keys()):
-        if (k != A and k != B):
-            other_owner_data.append(owners[k])
-    other_owner_data = set(flatten(other_owner_data))
-    allTest = []
-    for i in list(set(owners[A])):
-        allTest.append(DataItemMC(i))
-    return allTest, other_owner_data
+# greedySolBaseline            
 
 # %%
 # Master comparison: Test SV-Exp vs MC for all uniform distributions of data over different data assignments
@@ -958,22 +1184,21 @@ def testBatchCF(all_train_data, test_data, target_data_size, num_owners, num_ite
     totalGRBSCheck = []
 
     for i in range(num_trials):
-        datasetSize, ownerASize, ownerBSize, correctSol, MCSamples, greedyBaselineSamples, mcSub, greedyBaselineSubset, MCTimes, GRBSTimes, MCCheck, GRBSCheck, MCDiff, GRBSDiff = compareAllCF(all_train_data, test_data, target_data_size, num_owners, num_iterations, start_diff, data_dist, size_dist, util)
+        datasetSize, ownerASize, ownerBSize, correctSol, MCSamples, greedyBaselineSamples, mcSubLength, mcSub, greedySubLength, greedySub, MCTimes, GRBSTimes, MCCheck, GRBSCheck, MCDiff, GRBSDiff, MCOrigDiff, GRBSOrigDiff = compareAllCF(all_train_data, test_data, target_data_size, num_owners, num_iterations, start_diff, data_dist, size_dist, util)
         datasetSizes.append(datasetSize)
         ownerASizes.append(ownerASize)
         ownerBSizes.append(ownerBSize)
         totalMCSamples.append(np.mean(MCSamples))
         totalGreedyBaselineSamples.append(np.mean(greedyBaselineSamples))
 #         trueAnswers.append(len(correctSol))
-        finalMCAnswers.append(np.mean(mcSub))
-        finalGreedyBaselineAnswers.append(np.mean(greedyBaselineSubset))
+        finalMCAnswers.append(np.mean(mcSubLength))
+        finalGreedyBaselineAnswers.append(np.mean(greedySubLength))
         totalMCCheck.append(MCCheck)
         totalGRBSCheck.append(GRBSCheck)
         totalMCTimes.append(np.mean(MCTimes))
         totalGRBSTimes.append(np.mean(GRBSTimes))
         with open(csv_file_path, 'a', newline='') as csv_file:
             csv_writer = csv.writer(csv_file)
-            csv_writer.writerow([datasetSize, ownerASize, ownerBSize, MCSamples[0], greedyBaselineSamples[0], mcSub[0], greedyBaselineSubset[0], MCTimes[0], GRBSTimes[0],MCCheck[0],GRBSCheck[0],MCDiff[0], GRBSDiff[0],num_owners,data_dist, size_dist,util,ds_name])
+            csv_writer.writerow([datasetSize, ownerASize, ownerBSize, MCSamples[0], greedyBaselineSamples[0], len(correctSol), correctSol, mcSubLength[0], mcSub, greedySubLength[0], greedySub, MCTimes[0], GRBSTimes[0],MCCheck[0],GRBSCheck[0],MCDiff[0], GRBSDiff[0],MCOrigDiff, GRBSOrigDiff, num_owners,data_dist, size_dist,util,ds_name])
     
-    return datasetSizes, ownerASizes, ownerBSizes, trueAnswers, totalMCSamples, totalGreedyBaselineSamples, finalMCAnswers, finalGreedyBaselineAnswers, totalMCTimes, totalGRBSTimes, totalMCCheck, totalGRBSCheck, MCDiff, GRBSDiff
-
+    return datasetSizes, ownerASizes, ownerBSizes, trueAnswers, totalMCSamples, totalGreedyBaselineSamples, finalMCAnswers, finalGreedyBaselineAnswers, totalMCTimes, totalGRBSTimes, totalMCCheck, totalGRBSCheck, MCDiff, GRBSDiff, MCOrigDiff, GRBSOrigDiff

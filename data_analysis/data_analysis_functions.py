@@ -85,16 +85,25 @@ def process_csv_files(csv_files, columns_to_process):
     processed_df = pd.DataFrame()
 
     for df in csv_files:
+        df.loc[df['MC_diff'] == 1, 'MC_answer'] = np.nan
+        df.loc[df['MC_diff'] == 1, 'MC_time'] = np.nan
+        df.loc[df['greedy_diff'] == 1, 'greedy_answer'] = np.nan
+        df.loc[df['greedy_diff'] == 1, 'greedy_time'] = np.nan
+        df.loc[df['MC_diff'] == 1, 'MC_accuracy'] = np.nan
+        df.loc[df['greedy_diff'] == 1, 'greedy_accuracy'] = np.nan
+        df.loc[df['MC_answer'] == 0, 'MC_answer'] = np.nan
+        df.loc[df['MC_time'] == 0, 'MC_time'] = np.nan
+
         # Calculate statistics for each specified column
         stats = {}
         for column in columns_to_process:
-            col_mean = df[column].mean()
-            col_stdev = df[column].std()
+            col_mean = df[column].mean(skipna=True)
+            col_stdev = df[column].std(skipna=True)
             stats[f"{column}_mean"] = col_mean
             stats[f"{column}_std"] = col_stdev
 
-        stats["MC_accuracy"] = (df['MC_accuracy'].sum() / len(df['MC_accuracy'])) * 100
-        stats["greedy_accuracy"] = (df['greedy_accuracy'].sum() / len(df['greedy_accuracy'])) * 100
+        stats["MC_accuracy"] = (df['MC_accuracy'].mean(skipna=True))*100
+        stats["greedy_accuracy"] = (df['greedy_accuracy'].mean(skipna=True))*100
         stats["num_owners"] = df['num_owners'][0]
         stats["util"] = df['util'][0]
         stats["data_dist"] = df['data_dist'][0]
@@ -193,16 +202,17 @@ def plot_runtimes(summary_stats, mc_var, greedy_var):
     # Plot bars for SV-Exp
     plt.bar(index + bar_width, greedy_time_means, bar_width, label='SV-Exp', yerr=greedy_time_stds, capsize=5)
 
-    plt.xlabel('Parameter Set', fontsize=17)
-    plt.ylabel('Mean Runtime (seconds)', fontsize=17)
-    plt.title(f'Runtime Performance for {util[0]} Utility', fontsize=20)
+    plt.xlabel('Parameter Set', fontsize=19)
+    plt.ylabel('Mean Runtime (seconds)', fontsize=19)
+    plt.title(f'Runtime Performance for {util[0]} Utility', fontsize=25)
 
     # Use custom labels for x-axis
     parameter_labels = [f"{util[i]}, \n n={num_owners[i]}" for i in range(0, num_points)]
-    plt.xticks(index + bar_width / 2, parameter_labels, fontsize=12)
+    plt.xticks(index + bar_width / 2, parameter_labels, fontsize=17)
 
     # Customize the y-axis tick labels to e^y
     plt.yscale('log')
+    plt.yticks(fontsize=17)
 
     plt.ylim(0, 10000)
 
@@ -241,8 +251,8 @@ def makeTableNat(df, x, y, metrics):
         if m == "greedy_accuracy":
             title = "SV-Exp Counterfactual Accuracy"
 
-        grouped_mean = df.groupby([x, y])[m].apply(lambda group: group.mean(skipna=False)).reset_index()
-        grouped_std = df.groupby([x, y])[m].apply(lambda group: group.std(skipna=False)).reset_index()
+        grouped_mean = df.groupby([x, y])[m].apply(lambda group: group.mean(skipna=True)).reset_index()
+        grouped_std = df.groupby([x, y])[m].apply(lambda group: group.std(skipna=True)).reset_index()
 
         # Create a pivot table
         pivot_table_mean = grouped_mean.pivot(index=y, columns=x, values=m)[::-1]
@@ -253,18 +263,38 @@ def makeTableNat(df, x, y, metrics):
         pivot_table_std.index = pivot_table_std.index.astype(int)
         pivot_table_std.columns = pivot_table_std.columns.astype(int)
 
-        months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+        months = ['Jan (25)', 'Feb (37)', 'Mar (52)', 'Apr (45)', 'May (59)', 'Jun (61)', 'Jul (65)', 'Aug (79)', 'Sep (105)', 'Oct (117)', 'Nov (73)', 'Dec (82)']
 
         # print(pivot_table_mean)
         # print(pivot_table_std)
 
-        # Create a heatmap
+        # # Create a heatmap
+        # plt.figure(figsize=(12, 6))
+        # plt.subplot(1, 2, 1)
+        # sns.heatmap(pivot_table_std/pivot_table_mean, xticklabels=months, yticklabels=months[::-1], annot=True, cmap='YlGnBu', fmt=".2f",annot_kws={"size": 8})
+        # # plt.title(f'{m} Mean Heatmap')
+        # # plt.title('MC Counterfactual Accuracy Mean Heatmap', fontsize=15, pad=10)
+        # plt.title('SV-Exp CF Size Coefficient of Variation Heatmap', fontsize=15, pad=10)
+        # plt.xlabel("Month (A)", fontsize=13)
+        # plt.ylabel("Month (B)", fontsize=13)
+        # plt.tick_params(labelsize=11)
+
+        # plt.figure(figsize=(12, 6))
+        # plt.subplot(1, 2, 1)
+        # sns.heatmap(pivot_table_mean, xticklabels=months, yticklabels=months[::-1], annot=True, cmap='YlGnBu', fmt=".2f",annot_kws={"size": 8})
+        # # plt.title(f'{m} Mean Heatmap')
+        # # plt.title('MC Counterfactual Accuracy Mean Heatmap', fontsize=15, pad=10)
+        # plt.title('Initial Differential Shapley Heatmap', fontsize=15, pad=10)
+        # plt.xlabel("Month (A)", fontsize=13)
+        # plt.ylabel("Month (B)", fontsize=13)
+        # plt.tick_params(labelsize=11)
+
         plt.figure(figsize=(12, 6))
         plt.subplot(1, 2, 1)
         sns.heatmap(pivot_table_mean, xticklabels=months, yticklabels=months[::-1], annot=True, cmap='YlGnBu', fmt=".2f",annot_kws={"size": 8})
         # plt.title(f'{m} Mean Heatmap')
         # plt.title('MC Counterfactual Accuracy Mean Heatmap', fontsize=15, pad=10)
-        plt.title(f'{title} Mean Heatmap', fontsize=15, pad=10)
+        plt.title('SV-Exp Counterfactual Size Mean Heatmap', fontsize=15, pad=10)
         plt.xlabel("Month (A)", fontsize=13)
         plt.ylabel("Month (B)", fontsize=13)
         plt.tick_params(labelsize=11)
@@ -273,7 +303,7 @@ def makeTableNat(df, x, y, metrics):
         sns.heatmap(pivot_table_std, xticklabels=months, yticklabels=months[::-1], annot=True, cmap='YlGnBu', fmt=".2f",annot_kws={"size": 8})
         # plt.title(f'{m} Std. Dev. Heatmap')
         # plt.title('MC Counterfactual Accuracy Std. Dev. Heatmap', fontsize=15, pad=10)
-        plt.title(f'{title} Std. Dev. Heatmap', fontsize=15, pad=10)
+        plt.title('SV-Exp Counterfactual Size Std. Dev. Heatmap', fontsize=15, pad=10)
         plt.xlabel("Month (A)", fontsize=13)
         plt.ylabel("Month (B)", fontsize=13)
 
@@ -297,13 +327,13 @@ def makeTableZipf(df, x, y, metrics):
             title = "SV-Exp Counterfactual Size"
 
         if m == "MC_accuracy":
-            title = "MC Counterfactual Accuracy"
+            title = "MC Counterfactual Success Rate"
 
         if m == "greedy_accuracy":
-            title = "SV-Exp Counterfactual Accuracy"
+            title = "SV-Exp Counterfactual Success Rate"
 
-        grouped_mean = df.groupby([x, y])[m].apply(lambda group: group.mean(skipna=False)).reset_index()
-        grouped_std = df.groupby([x, y])[m].apply(lambda group: group.std(skipna=False)).reset_index()
+        grouped_mean = df.groupby([x, y])[m].apply(lambda group: group.mean(skipna=True)).reset_index()
+        grouped_std = df.groupby([x, y])[m].apply(lambda group: group.std(skipna=True)).reset_index()
 
         # Create a pivot table
         pivot_table_mean = grouped_mean.pivot(index=y, columns=x, values=m)[::-1]
