@@ -250,6 +250,9 @@ def makeTableNat(df, x, y, metrics):
 
         if m == "greedy_accuracy":
             title = "SV-Exp Counterfactual Accuracy"
+        
+        # df['MC_answer'] = df['MC_answer']/df['A_size']
+
 
         grouped_mean = df.groupby([x, y])[m].apply(lambda group: group.mean(skipna=True)).reset_index()
         grouped_std = df.groupby([x, y])[m].apply(lambda group: group.std(skipna=True)).reset_index()
@@ -262,6 +265,14 @@ def makeTableNat(df, x, y, metrics):
         pivot_table_std = grouped_std.pivot(index=y, columns=x, values=m)[::-1]
         pivot_table_std.index = pivot_table_std.index.astype(int)
         pivot_table_std.columns = pivot_table_std.columns.astype(int)
+
+        # # Custom function to remove leading zeros from the format
+        # def format_no_leading_zero(x):
+        #     return str(x).lstrip('0')
+
+        # # Apply the custom formatting to the pivot tables
+        # pivot_table_mean = pivot_table_mean.applymap(format_no_leading_zero)
+        # pivot_table_std = pivot_table_std.applymap(format_no_leading_zero)
 
         months = ['Jan (25)', 'Feb (37)', 'Mar (52)', 'Apr (45)', 'May (59)', 'Jun (61)', 'Jul (65)', 'Aug (79)', 'Sep (105)', 'Oct (117)', 'Nov (73)', 'Dec (82)']
 
@@ -291,23 +302,23 @@ def makeTableNat(df, x, y, metrics):
 
         plt.figure(figsize=(12, 6))
         plt.subplot(1, 2, 1)
-        sns.heatmap(pivot_table_mean, xticklabels=months, yticklabels=months[::-1], annot=True, cmap='YlGnBu', fmt=".2f",annot_kws={"size": 8})
+        sns.heatmap(pivot_table_mean, xticklabels=months, yticklabels=months[::-1], annot=True, cmap='YlGnBu', fmt=".2f",annot_kws={"size": 8.5})
         # plt.title(f'{m} Mean Heatmap')
         # plt.title('MC Counterfactual Accuracy Mean Heatmap', fontsize=15, pad=10)
-        plt.title('SV-Exp Counterfactual Size Mean Heatmap', fontsize=15, pad=10)
-        plt.xlabel("Month (A)", fontsize=13)
-        plt.ylabel("Month (B)", fontsize=13)
-        plt.tick_params(labelsize=11)
+        plt.title('SV-Exp CF Size Mean Heatmap', fontsize=18, pad=10)
+        plt.xlabel("Month (A)", fontsize=16)
+        plt.ylabel("Month (B)", fontsize=16)
+        plt.tick_params(labelsize=14)
 
         plt.subplot(1, 2, 2)
-        sns.heatmap(pivot_table_std, xticklabels=months, yticklabels=months[::-1], annot=True, cmap='YlGnBu', fmt=".2f",annot_kws={"size": 8})
+        sns.heatmap(pivot_table_std, xticklabels=months, yticklabels=months[::-1], annot=True, cmap='YlGnBu', fmt=".2f",annot_kws={"size": 8.5})
         # plt.title(f'{m} Std. Dev. Heatmap')
         # plt.title('MC Counterfactual Accuracy Std. Dev. Heatmap', fontsize=15, pad=10)
-        plt.title('SV-Exp Counterfactual Size Std. Dev. Heatmap', fontsize=15, pad=10)
-        plt.xlabel("Month (A)", fontsize=13)
-        plt.ylabel("Month (B)", fontsize=13)
+        plt.title('SV-Exp CF Size Std. Dev. Heatmap', fontsize=18, pad=10)
+        plt.xlabel("Month (A)", fontsize=16)
+        plt.ylabel("Month (B)", fontsize=16)
 
-        plt.tick_params(labelsize=11)
+        plt.tick_params(labelsize=15)
         plt.tight_layout()
         plt.show()
 
@@ -327,10 +338,10 @@ def makeTableZipf(df, x, y, metrics):
             title = "SV-Exp Counterfactual Size"
 
         if m == "MC_accuracy":
-            title = "MC Counterfactual Success Rate"
+            title = "MC CF Success Rate"
 
         if m == "greedy_accuracy":
-            title = "SV-Exp Counterfactual Success Rate"
+            title = "SV-Exp CF Success Rate"
 
         grouped_mean = df.groupby([x, y])[m].apply(lambda group: group.mean(skipna=True)).reset_index()
         grouped_std = df.groupby([x, y])[m].apply(lambda group: group.std(skipna=True)).reset_index()
@@ -344,20 +355,24 @@ def makeTableZipf(df, x, y, metrics):
         # Create a heatmap
         plt.figure(figsize=(12, 6))
         plt.subplot(1, 2, 1)
-        sns.heatmap(pivot_table_mean, annot=True, cmap='YlGnBu', fmt=".2f",annot_kws={"size": 10})
+        sns.heatmap(pivot_table_mean, annot=True, cmap='YlGnBu', fmt=".2f",annot_kws={"size": 13})
         # plt.title(f'{m} Mean Heatmap')
-        plt.title(f'{title} Mean Heatmap', fontsize=15, pad=10)
+        plt.title(f'{title} Mean Heatmap', fontsize=17, pad=10)
         # plt.title('MC Counterfactual Accuracy Mean Heatmap')
-        plt.xlabel("Size of Owned Data (A)", fontsize=13)
-        plt.ylabel("Size of Owned Data (B)", fontsize=13)
+        plt.xlabel("Size of Owned Data (A)", fontsize=16)
+        plt.ylabel("Size of Owned Data (B)", fontsize=16)
+        plt.xticks(fontsize=15)
+        plt.yticks(fontsize=15)
 
         plt.subplot(1, 2, 2)
-        sns.heatmap(pivot_table_std, annot=True, cmap='YlGnBu', fmt=".2f",annot_kws={"size": 10})
+        sns.heatmap(pivot_table_std, annot=True, cmap='YlGnBu', fmt=".2f",annot_kws={"size": 13})
         # plt.title(f'{m} Std. Dev. Heatmap')
-        plt.title(f'{title} Std. Dev. Heatmap', fontsize=15, pad=10)
+        plt.title(f'{title} Std. Dev. Heatmap', fontsize=17, pad=10)
         # plt.title('MC Counterfactual Accuracy Std. Dev. Heatmap')
-        plt.xlabel("Size of Owned Data (A)", fontsize=13)
-        plt.ylabel("Size of Owned Data (B)", fontsize=13)
+        plt.xlabel("Size of Owned Data (A)", fontsize=16)
+        plt.ylabel("Size of Owned Data (B)", fontsize=16)
+        plt.xticks(fontsize=15)
+        plt.yticks(fontsize=15)
 
         plt.tick_params(labelsize=12)
         plt.tight_layout()
